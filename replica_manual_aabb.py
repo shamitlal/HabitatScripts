@@ -120,6 +120,7 @@ sim.seed(sim_settings["seed"])
 agent = sim.initialize_agent(sim_settings["default_agent"])
 agent_state = habitat_sim.AgentState()
 agent_state.position = np.array([1.5, 1.072447, 0.0])
+# agent_state.position = np.array([2.875, 1.4252348, 3.4811885])
 #agent_state.position = np.array([1.0, 3.0, 1.0])
 agent.set_state(agent_state)
 
@@ -291,6 +292,7 @@ while total_frames < max_frames:
         if action != "save_data":
             print("Performing action")
             observations = sim.step(action)
+            print("agent_state: position", agent.state.position, "rotation", agent.state.rotation)
             rgb = observations["color_sensor"]
             semantic = observations["semantic_sensor"]
             depth = observations["depth_sensor"]
