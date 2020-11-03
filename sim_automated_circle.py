@@ -39,21 +39,13 @@ Directories to save files: hdd somewhere
 class AutomatedMultiview():
     def __init__(self):
 
-        # self.DONOTHING_KEY="r"
-        # self.FORWARD_KEY="w"
-        # self.LEFT_KEY="a"
-        # self.RIGHT_KEY="d"
-        # self.FINISH="f"
-        # self.SAVE = "o"
-        # self.UP = "u"
-        # self.DOWN = "l"
-        # self.QUIT = "q"
-        self.num_episodes = 50
+        
         self.visualize = False
         self.verbose = False
 
         self.mapnames = os.listdir('/hdd/replica/Replica-Dataset/out/')
-
+        self.num_episodes = len(self.mapnames)
+        # self.num_episodes = 1 # temporary
         #self.ignore_classes = ['book','base-cabinet','beam','blanket','blinds','cloth','clothing','coaster','comforter','curtain','ceiling','countertop','floor','handrail','mat','paper-towel','picture','pillar','pipe','scarf','shower-stall','switch','tissue-paper','towel','vent','wall','wall-plug','window','rug','logo','set-of-clothing']
         self.include_classes = ['chair', 'bed', 'toilet', 'sofa', 'indoor-plant', 'bottle', 'clock', 'refrigerator', 'tv-screen', 'vase']
         self.small_classes = ['indoor-plant', 'bottle', 'clock', 'vase']
@@ -72,7 +64,8 @@ class AutomatedMultiview():
 
         for episode in range(self.num_episodes):
             print("STARTING EPISODE ", episode)
-            mapname = np.random.choice(self.mapnames)
+            # mapname = np.random.choice(self.mapnames)
+            mapname = self.mapnames[episode]
             #mapname = 'apartment_0'
             self.test_scene = "/hdd/replica/Replica-Dataset/out/{}/habitat/mesh_semantic.ply".format(mapname)
             self.object_json = "/hdd/replica/Replica-Dataset/out/{}/habitat/info_semantic.json".format(mapname)
@@ -88,7 +81,7 @@ class AutomatedMultiview():
                 "seed": 1,
             }
 
-            self.basepath = f"/hdd/ayushj/habitat_data_new/{mapname}_{episode}"
+            self.basepath = f"/hdd/ayushj/replica_dome_test/{mapname}_{episode}"
             if not os.path.exists(self.basepath):
                 os.mkdir(self.basepath)
 
@@ -256,14 +249,13 @@ class AutomatedMultiview():
                     print("Class name is : ", class_name)
             except Exception as e:
                 print(e)
-                st()
                 print("done")
             #if class_name not in self.ignore_classes:
             if class_name in self.include_classes:
                 obj_instance = self.sim.semantic_scene.objects[obj_id]
                 # print("Object name {}, Object category id {}, Object instance id {}".format(class_name, obj_instance['id'], obj_instance['class_id']))
-
-                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(), 'bbox_center': obj_instance.obb.to_aabb().center, 'bbox_size': obj_instance.obb.to_aabb().sizes}
+                # st()
+                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(), 'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes}
                 # object_list.append(obj_instance)
                 object_list.append(obj_data)
 
@@ -326,7 +318,6 @@ class AutomatedMultiview():
         scene = self.sim.semantic_scene
         objects = scene.objects
         for obj in objects:
-            #if obj == None or obj.category == None or obj.category.name() in self.ignore_classes:
             if obj == None or obj.category == None or obj.category.name() not in self.include_classes:
                 continue
             # st()
@@ -349,18 +340,8 @@ class AutomatedMultiview():
 
             # Bin points based on angles [vertical_angle (10 deg/bin), horizontal_angle (10 deg/bin)]
             valid_pts_shift = valid_pts - obj_center
-            # valid_pts_flat = valid_pts.copy()
-            # valid_pts_flat[:, 1] = 0.0
 
-            # obj_center_flat = obj_center.copy()
-            # obj_center_flat[:, 1] = 0.0
             
-            # st()
-            #valid_quats = np.vstack([quaternion.as_float_array(quat_from_two_vectors(obj_center[0], valid_pt)) for valid_pt in valid_pts])
-            #valid_eulers = Rotation.from_quat(valid_quats).as_euler('xyz', degrees=True) + 180
-            #valid_yaw = valid_eulers[:, 2]
-            #valid_pitch = np.degrees(np.arctan((np.sqrt(valid_pts_shift[:,0]**2+valid_pts_shift[:,2]**2)/valid_pts_shift[:,1]**2))) #(phi) (y)
-            #valid_yaw = np.degrees(np.arccos(valid_pts_shift[:,0]/(np.sqrt(valid_pts_shift[:,0]**2+valid_pts_shift[:,1]**2)))) # (theta) (z)
             valid_yaw = np.degrees(np.arctan2(valid_pts_shift[:,2],valid_pts_shift[:,0]))
 
 
@@ -432,64 +413,16 @@ class AutomatedMultiview():
                     flat_to_obj /= flat_dist_to_obj
 
                     det = (flat_to_obj[0] * agent_local_forward[2]- agent_local_forward[0] * flat_to_obj[2])
-                    #print("DET", det)
                     turn_angle = math.atan2(det, np.dot(agent_local_forward, flat_to_obj))
-                    #print("TURN", turn_angle)
-                    #print(det)
                     quat_yaw = quat_from_angle_axis(turn_angle, np.array([0, 1.0, 0]))
                     agent_state.rotation = quat_yaw
-                    # print(quat_yaw)
-
-                    # valid_pitch = math.atan2(np.sqrt(agent_to_obj[2]**2+agent_to_obj[1]**2),agent_to_obj[0])
-                    # #valid_pitch = math.atan2(agent_to_obj[1],agent_to_obj[2])
-
-                    # quat_pitch = quat_from_angle_axis(valid_pitch, np.array([1.0, 0, 0]))
-                    # print(quat_pitch)
-
-                    # print(quat_pitch + quat_yaw)
-
-                    # quat_comb = habitat.utils.geometry_utils.quaternion_from_two_vectors(np.squeeze(obj_center), agent_state.position)
-
-                    # agent_state.rotation = quat_comb
-
-                    # print(agent_state.rotation)
-
-                    ############
-                    # st()
-                    # get quaternion from euler angles
-                    # rot = Rotation.from_euler('xyz', [valid_yaw[s_ind], 0, valid_pitch[s_ind]], degrees=True)
-                    # rot_quat = np.quaternion(*(rot.as_quat()))
-
-                    # # try
-                    # agent_local_forward = np.array([0, 0, -1.0])
-                    # flat_to_obj = np.array([valid_pts_shift[s_ind, 0], 0.0, valid_pts_shift[s_ind, 2]])
-                    # flat_dist_to_obj = np.linalg.norm(flat_to_obj)
-                    # flat_to_obj /= flat_dist_to_obj
-
-                    # det = (
-                    #     flat_to_obj[0] * agent_local_forward[2]
-                    #     - agent_local_forward[0] * flat_to_obj[2]
-                    # )
-                    # turn_angle = math.atan2(det, np.dot(agent_local_forward, flat_to_obj))
-                    # rot = quat_from_angle_axis(turn_angle, np.array([0, 1.0, 0]))
-
-                    #######
-                    # print("OBJECT CENTER: ", obj_center)
-                    # print("POINT: ", valid_pts[s_ind])
-                    # rot_s = quat_from_two_vectors(np.squeeze(obj_center), pos_s)
-
-                    #self.cfg.freeze()
-                    # with habitat.Env(config=self.sim_cfg, dataset=None) as env:
-                    #     observations = self.agent.get_observations_at(list(pos_s), list(rot_s))
-                    # print(observations)
-                
-                    # = rot
+                   
                     
                     # change sensor state to default 
                     # need to move the sensors too
                     for sensor in agent_state.sensor_states:
                         agent_state.sensor_states[sensor].rotation = agent_state.rotation
-                        agent_state.sensor_states[sensor].position = agent_state.position
+                        agent_state.sensor_states[sensor].position = agent_state.position + np.array[0, 1.5, 0]
 
                     # agent_state.rotation = rot
                     
@@ -516,22 +449,7 @@ class AutomatedMultiview():
                     #         self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
 
                     #print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
-                    
-
-                    # Visualize
-                    
-                        # cv2.waitKey(0)
-                        # cv2.destroyAllWindows()
                         
-            
-        #     vut.make_video(
-        #     observations=episodes,
-        #     primary_obs="color_sensor",
-        #     primary_obs_type="color",
-        #     video_file= './' + "rotation",
-        #     fps=3,
-        #     open_vid=self.visualize,
-        # )
 
             if len(episodes) >= self.num_views:
                 print(f'num episodes: {len(episodes)}')
@@ -551,68 +469,7 @@ class AutomatedMultiview():
                 valid_pts_selected = np.vstack(valid_pts_selected)
                 self.plot_navigable_points(valid_pts_selected)
 
-            # data_folder = obj.category.name() + '_' + obj.id
-            # data_path = os.path.join(self.basepath, data_folder)
-            # for obs in episodes:
-            #     self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, False)
-            #     viewnum += 1
 
-
-                            # for obs in any_obs:
-                #     self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, False)
-                #     viewnum += 1
-                # self.display_sample(rgb, semantic, depth)
-                # cv2.waitKey(0)
-
-
-            # action = "do_nothing"
-            # flat_views = [] #flatview corresponds to moveup=100
-            # any_views = []
-
-            # for closest_navpt in closest_navpts[:15]:
-            #     print("Launch position is: ", closest_navpt)
-            #     agent_state = habitat_sim.AgentState()
-            #     agent_state.position = closest_navpt
-            #     self.agent.set_state(agent_state)
-            #     self.sim.step(action)
-                
-            #     observations = self.sim.step("look_down_init")
-
-            #     for moveup in range(0, 160, int(self.rot_interval)):
-            #         actionup = "do_nothing" if moveup==0 else "look_up"
-            #         print(f"actionup is: {actionup}. Moveup value is: {moveup}")
-            #         observations = self.sim.step(actionup)
-
-            #         for moveleft in range(0, 360, int(self.rot_interval)):
-            #             actionleft = "do_nothing" if moveleft==0 else "turn_left"
-            #             print(f"actionleft is {actionleft}")
-            #             observations = self.sim.step(actionleft)
-            #             if self.is_valid_datapoint(observations, obj):
-            #                 if moveup == 100:
-            #                     flat_views.append(observations)
-            #                 else:
-            #                     any_views.append(observations)
-            #             print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
-            #             rgb = observations["color_sensor"]
-            #             semantic = observations["semantic_sensor"]
-            #             depth = observations["depth_sensor"]
-            #             # self.display_sample(rgb, semantic, depth)
-            #             # cv2.waitKey(0)
-            # st()
-            # if len(flat_views) >= self.num_flat_views and len(any_views) >= self.num_any_views:
-            #     data_folder = obj.category.name() + '_' + obj.id
-            #     data_path = os.path.join(self.basepath, data_folder)
-            #     os.mkdir(data_path)
-            #     flat_obs = np.random.choice(flat_views, self.num_flat_views, replace=False)
-            #     any_obs = np.random.choice(any_views, self.num_any_views, replace=False)
-            #     viewnum = 0
-            #     for obs in flat_obs:
-            #         self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, True)
-            #         viewnum += 1
-                
-                # for obs in any_obs:
-                #     self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, False)
-                #     viewnum += 1
 
     def get_navigable_points(self):
         navigable_points = np.array([0,0,0])
@@ -627,84 +484,6 @@ class AutomatedMultiview():
         plt.plot(z_sample, x_sample, 'o', color = 'red')
         
         plt.show()
-
-    # # Just visualize the scene from different navigable points
-    # def test_navigable_points(self):
-        
-    #     action = "move_forward"
-    #     for pts in self.nav_pts:
-    #         keystroke = cv2.waitKey(0)
-    #         print("keystroke: ", keystroke)
-    #         print("Launch position is: ", pts)
-    #         agent_state = habitat_sim.AgentState()
-    #         agent_state.position = pts
-    #         self.agent.set_state(agent_state)
-    #         observations = self.sim.step(action)
-    #         rgb = observations["color_sensor"]
-    #         semantic = observations["semantic_sensor"]
-    #         depth = observations["depth_sensor"]
-    #         self.display_sample(rgb, semantic, depth)
-
-    # # Test whether we actually spawn near given object when we select navigable point near it.
-    # def test_navigable_point_for_single_obj(self):
-    #     scene = self.sim.semantic_scene
-    #     objects = scene.objects
-    #     for obj in objects:
-    #         if obj == None or obj.category == None:
-    #             continue
-    #         print(f"Object name is: {obj.category.name()}")
-
-    #         if obj.category.name() == "bathtub":
-    #             obj_center = obj.obb.to_aabb().center
-    #             obj_center = np.expand_dims(obj_center, axis=0)
-    #             distances = np.sqrt(np.sum((self.nav_pts - obj_center)**2, axis=1))
-    #             closest_navpt = self.nav_pts[distances.argmin()]
-    #             action = "move_forward"
-    #             print("Launch position is: ", closest_navpt)
-    #             agent_state = habitat_sim.AgentState()
-    #             agent_state.position = closest_navpt
-    #             self.agent.set_state(agent_state)
-    #             while True:
-                    
-    #                 observations = self.sim.step(action)
-    #                 rgb = observations["color_sensor"]
-    #                 semantic = observations["semantic_sensor"]
-    #                 depth = observations["depth_sensor"]
-    #                 self.display_sample(rgb, semantic, depth)
-    #                 keystroke = cv2.waitKey(0)
-    #                 print("keystroke: ", keystroke)
-
-    #                 if( 255!=keystroke and keystroke!=(-1) ):  
-                        
-    #                     if keystroke == ord(self.DONOTHING_KEY):
-    #                         action = "do_nothing"
-    #                         print("action: DONOTHING")
-    #                     elif keystroke == ord(self.FORWARD_KEY):
-    #                         action = "move_forward"
-    #                         print("action: FORWARD")
-    #                     elif keystroke == ord(self.LEFT_KEY):
-    #                         action = "turn_left"
-    #                         print("action: LEFT")
-    #                     elif keystroke == ord(self.RIGHT_KEY):
-    #                         action = "turn_right"
-    #                         print("action: RIGHT")
-    #                     elif keystroke == ord(self.FINISH):
-    #                         action = "turn_right"
-    #                         print("action: FINISH")
-    #                         exit(1)
-    #                     elif keystroke == ord(self.SAVE):
-    #                         action = "save_data"
-    #                         print("action: SAVE")
-    #                     elif keystroke == ord(self.UP):
-    #                         action = "look_up"
-    #                         print("action: look up")
-    #                     elif keystroke == ord(self.DOWN):
-    #                         action = "look_down"
-    #                         print("action: look down")
-    #                     else:
-    #                         print("INVALID KEY")
-    #                         continue
-
 
 
 if __name__ == '__main__':
