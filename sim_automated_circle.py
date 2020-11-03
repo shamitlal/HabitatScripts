@@ -88,7 +88,7 @@ class AutomatedMultiview():
                 "seed": 1,
             }
 
-            self.basepath = f"/hdd/ayushj/habitat_data/{mapname}_{episode}"
+            self.basepath = f"/hdd/ayushj/habitat_data_new/{mapname}_{episode}"
             if not os.path.exists(self.basepath):
                 os.mkdir(self.basepath)
 
@@ -270,11 +270,14 @@ class AutomatedMultiview():
         # st()
         depth = observations["depth_sensor"]
         # self.display_sample(rgb, semantic, depth, visualize=True)
-        agent_pos = agent.state.position
-        agent_rot = agent.state.rotation
+        agent_pos = observations["positions"] #agent.state.position
+        agent_rot = observations["rotations"]
         # Assuming all sensors have same extrinsics
-        color_sensor_pos = agent.state.sensor_states['color_sensor'].position
-        color_sensor_rot = agent.state.sensor_states['color_sensor'].rotation
+        color_sensor_pos = observations["positions"] #agent.state.sensor_states['color_sensor'].position
+        color_sensor_rot = observations["rotations"] #agent.state.sensor_states['color_sensor'].rotation
+        print("POS ", agent_pos)
+        print("ROT ", color_sensor_rot)
+
         save_data = {'flat_view': flat_view, 'mainobj_id': mainobj_id, 'objects_info': object_list,'rgb_camX':rgb, 'depth_camX': depth, 'semantic_camX': semantic, 'agent_pos':agent_pos, 'agent_rot': agent_rot, 'sensor_pos': color_sensor_pos, 'sensor_rot': color_sensor_rot}
         
         with open(os.path.join(data_path, str(viewnum) + ".p"), 'wb') as f:
@@ -492,6 +495,10 @@ class AutomatedMultiview():
                     
                     self.agent.set_state(agent_state)
                     observations = self.sim.step(action)
+
+                    observations["rotations"] = agent_state.rotation
+                    observations["positions"] = agent_state.position
+
                     
                     if self.is_valid_datapoint(observations, obj):
                         if self.verbose:
