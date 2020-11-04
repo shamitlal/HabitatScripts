@@ -45,7 +45,7 @@ class AutomatedMultiview():
 
         self.mapnames = os.listdir('/hdd/replica/Replica-Dataset/out/')
         self.num_episodes = len(self.mapnames)
-        # self.num_episodes = 1 # temporary
+        self.num_episodes = 1 # temporary
         #self.ignore_classes = ['book','base-cabinet','beam','blanket','blinds','cloth','clothing','coaster','comforter','curtain','ceiling','countertop','floor','handrail','mat','paper-towel','picture','pillar','pipe','scarf','shower-stall','switch','tissue-paper','towel','vent','wall','wall-plug','window','rug','logo','set-of-clothing']
         self.include_classes = ['chair', 'bed', 'toilet', 'sofa', 'indoor-plant', 'bottle', 'clock', 'refrigerator', 'tv-screen', 'vase']
         self.small_classes = ['indoor-plant', 'bottle', 'clock', 'vase']
@@ -81,7 +81,7 @@ class AutomatedMultiview():
                 "seed": 1,
             }
 
-            self.basepath = f"/hdd/ayushj/replica_dome_test/{mapname}_{episode}"
+            self.basepath = f"/hdd/ayushj/replica_dome_test_obb/{mapname}_{episode}"
             if not os.path.exists(self.basepath):
                 os.mkdir(self.basepath)
 
@@ -255,7 +255,7 @@ class AutomatedMultiview():
                 obj_instance = self.sim.semantic_scene.objects[obj_id]
                 # print("Object name {}, Object category id {}, Object instance id {}".format(class_name, obj_instance['id'], obj_instance['class_id']))
                 # st()
-                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(), 'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes}
+                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(), 'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes, 'local_T_world': obj_instance.obb.local_to_world}
                 # object_list.append(obj_instance)
                 object_list.append(obj_data)
 
