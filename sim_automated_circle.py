@@ -1,3 +1,6 @@
+import ipdb
+st = ipdb.set_trace
+# st()
 import habitat_sim
 import habitat
 from habitat.config.default import get_config
@@ -14,7 +17,7 @@ import time
 import numpy as np
 import quaternion
 import ipdb
-st = ipdb.set_trace
+
 import os 
 import sys
 import pickle
@@ -42,13 +45,13 @@ class AutomatedMultiview():
         
         self.visualize = False
         self.verbose = False
-
-        self.mapnames = os.listdir('/hdd/replica/Replica-Dataset/out/')
+        # st()
+        self.mapnames = os.listdir('/home/nel/gsarch/Replica-Dataset/out/')
         self.num_episodes = len(self.mapnames)
-        self.num_episodes = 1 # temporary
+        # self.num_episodes = 1 # temporary
         #self.ignore_classes = ['book','base-cabinet','beam','blanket','blinds','cloth','clothing','coaster','comforter','curtain','ceiling','countertop','floor','handrail','mat','paper-towel','picture','pillar','pipe','scarf','shower-stall','switch','tissue-paper','towel','vent','wall','wall-plug','window','rug','logo','set-of-clothing']
-        self.include_classes = ['chair', 'bed', 'toilet', 'sofa', 'indoor-plant', 'bottle', 'clock', 'refrigerator', 'tv-screen', 'vase']
-        self.small_classes = ['indoor-plant', 'bottle', 'clock', 'vase']
+        self.include_classes = ['chair', 'bed', 'toilet', 'sofa', 'indoor-plant', 'clock', 'refrigerator', 'tv-screen']
+        self.small_classes = ['indoor-plant', 'clock', 'toilet']
         self.rot_interval = 20.
         self.radius_max = 3
         self.radius_min = 1
@@ -56,7 +59,7 @@ class AutomatedMultiview():
         self.num_any_views = 7
         self.num_views = 25
         # self.env = habitat.Env(config=config, dataset=None)
-
+        # st()
         # self.test_navigable_points()
         self.run_episodes()
 
@@ -67,8 +70,8 @@ class AutomatedMultiview():
             # mapname = np.random.choice(self.mapnames)
             mapname = self.mapnames[episode]
             #mapname = 'apartment_0'
-            self.test_scene = "/hdd/replica/Replica-Dataset/out/{}/habitat/mesh_semantic.ply".format(mapname)
-            self.object_json = "/hdd/replica/Replica-Dataset/out/{}/habitat/info_semantic.json".format(mapname)
+            self.test_scene = "/home/nel/gsarch/Replica-Dataset/out/{}/habitat/mesh_semantic.ply".format(mapname)
+            self.object_json = "/home/nel/gsarch/Replica-Dataset/out/{}/habitat/info_semantic.json".format(mapname)
             self.sim_settings = {
                 "width": 256,  # Spatial resolution of the observations
                 "height": 256,
@@ -81,7 +84,7 @@ class AutomatedMultiview():
                 "seed": 1,
             }
 
-            self.basepath = f"/hdd/ayushj/replica_dome_test_obb/{mapname}_{episode}"
+            self.basepath = f"/home/nel/gsarch/replica_dome_obb/{mapname}_{episode}"
             if not os.path.exists(self.basepath):
                 os.mkdir(self.basepath)
 
@@ -231,7 +234,7 @@ class AutomatedMultiview():
         
         # Extract objects from instance segmentation
         object_list = []
-        obj_ids = np.unique(semantic[30:230, 30:230])
+        obj_ids = np.unique(semantic)
         if self.verbose:
             print("Unique semantic ids: ", obj_ids)
 
@@ -245,6 +248,7 @@ class AutomatedMultiview():
                 continue
             try:
                 class_name = self.sim.semantic_scene.objects[obj_id].category.name()
+                
                 if self.verbose:
                     print("Class name is : ", class_name)
             except Exception as e:
@@ -253,9 +257,16 @@ class AutomatedMultiview():
             #if class_name not in self.ignore_classes:
             if class_name in self.include_classes:
                 obj_instance = self.sim.semantic_scene.objects[obj_id]
+                # st()
+                mask = np.zeros_like(semantic)
+                mask[semantic == obj_id] = 1
+                y, x = np.where(mask)
+                pred_box = np.array([min(y), min(x), max(y), max(x)]) # ymin, xmin, ymax, xmax
                 # print("Object name {}, Object category id {}, Object instance id {}".format(class_name, obj_instance['id'], obj_instance['class_id']))
                 # st()
-                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(), 'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes, 'local_T_world': obj_instance.obb.local_to_world}
+                obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(),
+                                 'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes,
+                                  'local_T_world': obj_instance.obb.local_to_world, 'mask_2d': mask, 'box_2d': pred_box}
                 # object_list.append(obj_instance)
                 object_list.append(obj_data)
 
@@ -276,7 +287,6 @@ class AutomatedMultiview():
             pickle.dump(save_data, f)
         f.close()
 
-
     def is_valid_datapoint(self, observations, mainobj):
         main_id = int(mainobj.id[1:])
         semantic = observations["semantic_sensor"]
@@ -286,10 +296,10 @@ class AutomatedMultiview():
         #print("Number of pixels: ", num_occ_pixels)
         small_objects = []
         if mainobj.category.name() in self.small_classes:
-            if num_occ_pixels > 30 and num_occ_pixels < 0.75*256*256:
+            if  num_occ_pixels < 0.9*256*256:
                 return True
         else:
-            if num_occ_pixels > 300 and num_occ_pixels < 0.75*256*256: 
+            if num_occ_pixels < 0.9*256*256: 
                 return True
         return False
 
