@@ -450,8 +450,8 @@ class AutomatedMultiview():
                     observations = self.sim.step(movement)
                     
                     # Assuming all sensors have same rotation and position
-                    observations["rotations"] = agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
-                    observations["positions"] = agent.state.sensor_states['color_sensor'].position
+                    observations["rotations"] = self.agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
+                    observations["positions"] = self.agent.state.sensor_states['color_sensor'].position
                     
                     if self.is_valid_datapoint(observations, obj):
                         if self.verbose:
