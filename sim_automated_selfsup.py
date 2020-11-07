@@ -3,7 +3,6 @@ st = ipdb.set_trace
 # st()
 import habitat_sim
 import habitat
-print("HJ")
 from habitat.config.default import get_config
 from PIL import Image
 from habitat_sim.utils.common import d3_40_colors_rgb
@@ -19,6 +18,12 @@ import numpy as np
 import quaternion
 import ipdb
 
+from detectron2 import model_zoo
+from detectron2.engine import DefaultPredictor
+from detectron2.config import get_cfg
+from detectron2.utils.visualizer import Visualizer
+from detectron2.data import MetadataCatalog, DatasetCatalog
+
 import os 
 import sys
 import pickle
@@ -30,14 +35,16 @@ EPSILON = 1e-8
 
 
 class AutomatedMultiview():
-    def __init__(self):   
-        self.visualize = False
+    def __init__(self):
+
+        
+        self.visualize = True
         self.verbose = False
         # st()
         self.mapnames = os.listdir('/home/nel/gsarch/Replica-Dataset/out/')
         # self.mapnames = os.listdir('/hdd/replica/Replica-Dataset/out/')
-        self.num_episodes = len(self.mapnames)
-        # self.num_episodes = 1 # temporary
+        # self.num_episodes = len(self.mapnames)
+        self.num_episodes = 1 # temporary
         #self.ignore_classes = ['book','base-cabinet','beam','blanket','blinds','cloth','clothing','coaster','comforter','curtain','ceiling','countertop','floor','handrail','mat','paper-towel','picture','pillar','pipe','scarf','shower-stall','switch','tissue-paper','towel','vent','wall','wall-plug','window','rug','logo','set-of-clothing']
         self.include_classes = ['chair', 'bed', 'toilet', 'sofa', 'indoor-plant', 'refrigerator', 'tv-screen', 'table']
         self.small_classes = ['indoor-plant', 'toilet']
@@ -47,6 +54,34 @@ class AutomatedMultiview():
         self.num_flat_views = 3
         self.num_any_views = 7
         self.num_views = 25
+        # Initialize maskRCNN
+        cfg = get_cfg()
+        cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
+        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # set threshold for this model
+        cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
+        self.cfg = cfg
+        self.maskrcnn = DefaultPredictor(cfg)
+        
+        # Filter only the five categories we care about
+        '''
+        class mapping between replica and maskRCNN
+        class-name      replica ID      maskRCNN ID
+        chair           20              56
+        bed             7               59
+        dining table    80              60
+        toilet          84              61
+        couch           76              57
+        potted plant    44              58
+        # bottle          14              39
+        # clock           22              74
+        refrigerator    67              72
+        tv(tv-screen)   87              62
+        # vase            91              75
+        '''
+        self.maskrcnn_to_catname = {56: "chair", 59: "bed", 61: "toilet", 57: "couch", 58: "indoor-plant", 
+                            72: "refrigerator", 62: "tv", 60: "dining-table"}
+        self.replica_to_maskrcnn = {20: 56, 7: 59, 84: 61, 76: 57, 44: 58, 67: 72, 87: 62, 80: 60}
+
         # self.env = habitat.Env(config=config, dataset=None)
         # st()
         # self.test_navigable_points()
@@ -76,7 +111,7 @@ class AutomatedMultiview():
                 "seed": 1,
             }
 
-            self.basepath = f"/home/nel/gsarch/replica_dome_center/{mapname}_{episode}"
+            self.basepath = f"/home/nel/gsarch/replica_dome_selfsup/{mapname}_{episode}"
             # self.basepath = f"/hdd/ayushj/habitat_data/{mapname}_{episode}"
             if not os.path.exists(self.basepath):
                 os.mkdir(self.basepath)
@@ -202,10 +237,26 @@ class AutomatedMultiview():
         #display_img = cv2
         plt.imshow(display_img)
         plt.show()
+
+        im = rgb_img[...,:3]
+        im = im[:, :, ::-1]
+        outputs = self.maskrcnn(im)
+
+        pred_masks = outputs['instances'].pred_masks
+        pred_boxes = outputs['instances'].pred_boxes.tensor
+        pred_classes = outputs['instances'].pred_classes
+        pred_scores = outputs['instances'].scores
+        
+        # converts instance segmentation to individual masks and bbox
+        # visualisations
+        v = Visualizer(im[:, :, ::-1], MetadataCatalog.get(self.cfg.DATASETS.TRAIN[0]), scale=1.2)
+        out = v.draw_instance_predictions(outputs['instances'].to("cpu"))
+        seg_im = out.get_image()
+
         # cv2.imshow('img',display_img)
         if visualize:
-            arr = [rgb_img, semantic_img, depth_img]
-            titles = ['rgb', 'semantic', 'depth']
+            arr = [rgb_img, semantic_img, depth_img, seg_im]
+            titles = ['rgb', 'semantic', 'depth', 'seg_im']
             plt.figure(figsize=(12 ,8))
             for i, data in enumerate(arr):
                 ax = plt.subplot(1, 3, i+1)
