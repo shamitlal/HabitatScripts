@@ -24,6 +24,8 @@ from detectron2.config import get_cfg
 from detectron2.utils.visualizer import Visualizer
 from detectron2.data import MetadataCatalog, DatasetCatalog
 
+import torch
+
 import os 
 import sys
 import pickle
@@ -38,7 +40,7 @@ class AutomatedMultiview():
     def __init__(self):
 
         
-        self.visualize = True
+        self.visualize = False
         self.verbose = False
         # st()
         self.mapnames = os.listdir('/home/nel/gsarch/Replica-Dataset/out/')
@@ -55,12 +57,13 @@ class AutomatedMultiview():
         self.num_any_views = 7
         self.num_views = 25
         # Initialize maskRCNN
-        cfg = get_cfg()
-        cfg.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
-        cfg.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # set threshold for this model
-        cfg.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
-        self.cfg = cfg
-        self.maskrcnn = DefaultPredictor(cfg)
+        cfg_det = get_cfg()
+        cfg_det.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
+        cfg_det.MODEL.ROI_HEADS.SCORE_THRESH_TEST = 0.5  # set threshold for this model
+        cfg_det.MODEL.WEIGHTS = model_zoo.get_checkpoint_url("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml")
+        cfg_det.MODEL.DEVICE='cpu'
+        self.cfg_det = cfg_det
+        self.maskrcnn = DefaultPredictor(cfg_det)
         
         # Filter only the five categories we care about
         '''
@@ -371,6 +374,7 @@ class AutomatedMultiview():
 
         scene = self.sim.semantic_scene
         objects = scene.objects
+        objects = random.sample(objects, len(objects))
         for obj in objects:
             if obj == None or obj.category == None or obj.category.name() not in self.include_classes:
                 continue
@@ -419,8 +423,8 @@ class AutomatedMultiview():
             if self.visualize:
                 import matplotlib.cm as cm
                 colors = iter(cm.rainbow(np.linspace(0, 1, nbins)))
-                plt.figure(2)
-                plt.clf()
+                #plt.figure(2)
+                #plt.clf()
                 print(np.unique(bin_yaw))
                 for bi in range(nbins):
                     cur_bi = np.where(bin_yaw==(bi+1))
@@ -430,13 +434,16 @@ class AutomatedMultiview():
                     plt.plot(z_sample, x_sample, 'o', color = next(colors))
                 plt.plot(obj_center[:,2], obj_center[:,0], 'x', color = 'black')
                 plt.show()
-
+                plt.pause(0.5)
+                plt.close()
             
             action = "do_nothing"
             episodes = []
             valid_pts_selected = []
             cnt = 0
-            for b in range(nbins):
+            bin_inds = list(range(nbins))
+            bin_inds = random.sample(bin_inds, len(bin_inds))
+            for b in bin_inds:
                 
                 # get all angle indices in the current bin range
                 # st()
@@ -444,85 +451,160 @@ class AutomatedMultiview():
                 if inds_bin_cur[0].size == 0:
                     continue
 
-                for s in range(spawns_per_bin):
+                # st()
+                s_ind = np.random.choice(inds_bin_cur[0])
+                #s_ind = inds_bin_cur[0][0]
+                pos_s = valid_pts[s_ind]
+                valid_pts_selected.append(pos_s)
+                agent_state = habitat_sim.AgentState()
+                agent_state.position = pos_s + np.array([0, 1.5, 0])
+
+
+                # YAW calculation - rotate to object
+                agent_to_obj = np.squeeze(obj_center) - agent_state.position
+                agent_local_forward = np.array([0, 0, -1.0]) # y, z, x
+                flat_to_obj = np.array([agent_to_obj[0], 0.0, agent_to_obj[2]])
+                flat_dist_to_obj = np.linalg.norm(flat_to_obj)
+                flat_to_obj /= flat_dist_to_obj
+
+                det = (flat_to_obj[0] * agent_local_forward[2]- agent_local_forward[0] * flat_to_obj[2])
+                turn_angle = math.atan2(det, np.dot(agent_local_forward, flat_to_obj))
+                quat_yaw = quat_from_angle_axis(turn_angle, np.array([0, 1.0, 0]))
+
+                # Set agent yaw rotation to look at object
+                agent_state.rotation = quat_yaw
+                
+                # change sensor state to default 
+                # need to move the sensors too
+                print(self.agent.state.sensor_states)
+                for sensor in self.agent.state.sensor_states:
                     # st()
-                    s_ind = np.random.choice(inds_bin_cur[0])
-                    #s_ind = inds_bin_cur[0][0]
-                    pos_s = valid_pts[s_ind]
-                    valid_pts_selected.append(pos_s)
-                    agent_state = habitat_sim.AgentState()
-                    agent_state.position = pos_s + np.array([0, 1.5, 0])
+                    self.agent.state.sensor_states[sensor].rotation = agent_state.rotation
+                    self.agent.state.sensor_states[sensor].position = agent_state.position # + np.array([0, 1.5, 0]) # ADDED IN UP TOP
+                    # print("PRINT", self.agent.state.sensor_states[sensor].rotation)
 
+                # Calculate Pitch from head to object
+                turn_pitch = np.degrees(math.atan2(agent_to_obj[1], flat_dist_to_obj))
+                num_turns = np.abs(np.floor(turn_pitch/self.rot_interval)).astype(int) # compute number of times to move head up or down by rot_interval
+                print("MOVING HEAD ", num_turns, " TIMES")
+                movement = "look_up" if turn_pitch>0 else "look_down"
 
-                    # YAW calculation - rotate to object
-                    agent_to_obj = np.squeeze(obj_center) - agent_state.position
-                    agent_local_forward = np.array([0, 0, -1.0]) # y, z, x
-                    flat_to_obj = np.array([agent_to_obj[0], 0.0, agent_to_obj[2]])
-                    flat_dist_to_obj = np.linalg.norm(flat_to_obj)
-                    flat_to_obj /= flat_dist_to_obj
+                # initiate agent
+                self.agent.set_state(agent_state)
+                self.sim.step(action)
 
-                    det = (flat_to_obj[0] * agent_local_forward[2]- agent_local_forward[0] * flat_to_obj[2])
-                    turn_angle = math.atan2(det, np.dot(agent_local_forward, flat_to_obj))
-                    quat_yaw = quat_from_angle_axis(turn_angle, np.array([0, 1.0, 0]))
-
-                    # Set agent yaw rotation to look at object
-                    agent_state.rotation = quat_yaw
-                    
-                    # change sensor state to default 
-                    # need to move the sensors too
-                    print(self.agent.state.sensor_states)
-                    for sensor in self.agent.state.sensor_states:
+                # Rotate "head" of agent up or down based on calculated pitch angle to object to center it in view
+                if num_turns == 0:
+                    pass
+                else: 
+                    for turn in range(num_turns):
                         # st()
-                        self.agent.state.sensor_states[sensor].rotation = agent_state.rotation
-                        self.agent.state.sensor_states[sensor].position = agent_state.position # + np.array([0, 1.5, 0]) # ADDED IN UP TOP
-                        # print("PRINT", self.agent.state.sensor_states[sensor].rotation)
-
-                    # Calculate Pitch from head to object
-                    turn_pitch = np.degrees(math.atan2(agent_to_obj[1], flat_dist_to_obj))
-                    num_turns = np.abs(np.floor(turn_pitch/self.rot_interval)).astype(int) # compute number of times to move head up or down by rot_interval
-                    print("MOVING HEAD ", num_turns, " TIMES")
-                    movement = "look_up" if turn_pitch>0 else "look_down"
-
-                    # initiate agent
-                    self.agent.set_state(agent_state)
-                    self.sim.step(action)
-
-                    # Rotate "head" of agent up or down based on calculated pitch angle to object to center it in view
-                    if num_turns == 0:
-                        pass
-                    else: 
-                        for turn in range(num_turns):
-                            # st()
-                            self.sim.step(movement)
-                            if self.verbose:
-                                for sensor in self.agent.state.sensor_states:
-                                    print(self.agent.state.sensor_states[sensor].rotation)
-                    
-                    # get observations after centiering
-                    observations = self.sim.step(action)
-                    
-                    # Assuming all sensors have same rotation and position
-                    observations["rotations"] = self.agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
-                    observations["positions"] = self.agent.state.sensor_states['color_sensor'].position
-                    
-                    if self.is_valid_datapoint(observations, obj):
+                        self.sim.step(movement)
                         if self.verbose:
-                            print("episode is valid......")
-                        episodes.append(observations)
-                        if self.visualize:
-                            rgb = observations["color_sensor"]
-                            semantic = observations["semantic_sensor"]
-                            depth = observations["depth_sensor"]
-                            self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
-                    # if self.visualize:
-                    #         rgb = observations["color_sensor"]
-                    #         semantic = observations["semantic_sensor"]
-                    #         depth = observations["depth_sensor"]
-                    #         self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+                            for sensor in self.agent.state.sensor_states:
+                                print(self.agent.state.sensor_states[sensor].rotation)
+                
+                # get observations after centiering
+                observations = self.sim.step(action)
 
-                    #print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
 
-                    cnt +=1
+                ####### %%%%%%%%%%%%%%%%%%%%%%% ######### MASK RCNN
+
+                im = observations["color_sensor"]
+                im = Image.fromarray(im, mode="RGBA")
+                im = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+
+                plt.imshow(im)
+                plt.show()
+
+                print(im.shape)
+                print(np.max(im))
+                print(np.min(im))
+                #im = np.transpose(im, (1, 2, 0)) #im.permute(1, 2, 0)
+                #im = im.detach().cpu().numpy()
+                print(im.shape)
+                
+                #im = im/255 # normalize [0-1]
+                print(im[0,0,:])
+                #im = im[:, :, ::-1] # bgr 
+                
+                print(im[0,0,:])
+                print(np.max(im))
+                print(np.min(im))
+                print(im.shape)
+                outputs = self.maskrcnn(im)
+
+                v = Visualizer(im[:, :, ::-1], MetadataCatalog.get(self.cfg_det.DATASETS.TRAIN[0]), scale=1.2)
+                out = v.draw_instance_predictions(outputs['instances'].to("cpu"))
+                seg_im = out.get_image()
+
+                plt.imshow(seg_im)
+                plt.show()
+
+                pred_masks = outputs['instances'].pred_masks
+                pred_boxes = outputs['instances'].pred_boxes.tensor
+                pred_classes = outputs['instances'].pred_classes
+                pred_scores = outputs['instances'].scores
+
+                obj_ids = []
+                obj_catids = []
+                obj_scores = []
+                obj_masks = []
+                obj_all_catids = []
+                obj_all_scores = []
+                obj_all_boxes = []
+                for segs in range(len(pred_masks)):
+                    # 1 and 3 are bikes. removing them for now
+                    print(pred_classes[segs])
+                    #if pred_classes[segs] > 1 and pred_classes[segs] <= 8 and pred_classes[segs] != 3:
+                    if pred_scores[segs] >= 0.80:
+                        obj_ids.append(segs)
+                        obj_catids.append(pred_classes[segs].item())
+                        obj_scores.append(pred_scores[segs].item())
+                        obj_masks.append(pred_masks[segs])
+                        print(pred_masks[segs])
+
+                        obj_all_catids.append(pred_classes[segs].item())
+                        obj_all_scores.append(pred_scores[segs].item())
+                        y, x = torch.where(pred_masks[segs])
+                        pred_box = torch.Tensor([min(y), min(x), max(y), max(x)]) # ymin, xmin, ymax, xmax
+                        obj_all_boxes.append(pred_box)
+
+                print("MASKS ", len(pred_masks))
+                print("VALID ", len(obj_scores))
+                print(obj_scores)
+                print(pred_scores.shape)
+
+                depth = observations["depth_sensor"]
+                print("DEPTH ", depth.shape)
+                
+
+                #################################
+
+
+                
+                # Assuming all sensors have same rotation and position
+                observations["rotations"] = self.agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
+                observations["positions"] = self.agent.state.sensor_states['color_sensor'].position
+                
+                if self.is_valid_datapoint(observations, obj):
+                    if self.verbose:
+                        print("episode is valid......")
+                    episodes.append(observations)
+                    if self.visualize:
+                        rgb = observations["color_sensor"]
+                        semantic = observations["semantic_sensor"]
+                        depth = observations["depth_sensor"]
+                        self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+                # if self.visualize:
+                #         rgb = observations["color_sensor"]
+                #         semantic = observations["semantic_sensor"]
+                #         depth = observations["depth_sensor"]
+                #         self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+
+                #print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
+
+                cnt +=1
                         
 
             if len(episodes) >= self.num_views:
