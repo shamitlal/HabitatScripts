@@ -35,12 +35,13 @@ from habitat_sim.utils import common as utils
 from scipy.spatial.transform import Rotation
 EPSILON = 1e-8
 
+from argparse import Namespace
+
 
 class AutomatedMultiview():
     def __init__(self):
 
-        
-        self.visualize = False
+        self.visualize = True
         self.verbose = False
         # st()
         self.mapnames = os.listdir('/home/nel/gsarch/Replica-Dataset/out/')
@@ -56,6 +57,8 @@ class AutomatedMultiview():
         self.num_flat_views = 3
         self.num_any_views = 7
         self.num_views = 25
+
+        self.num_objects_per_episode = 2
         # Initialize maskRCNN
         cfg_det = get_cfg()
         cfg_det.merge_from_file(model_zoo.get_config_file("COCO-InstanceSegmentation/mask_rcnn_R_50_FPN_3x.yaml"))
@@ -113,6 +116,9 @@ class AutomatedMultiview():
                 "depth_sensor": True,  # Depth sensor
                 "seed": 1,
             }
+
+            self.fov = 90
+            self.camera_matrix = self.get_camera_matrix(self.sim_settings["width"], self.sim_settings["height"], self.fov)
 
             self.basepath = f"/home/nel/gsarch/replica_dome_selfsup/{mapname}_{episode}"
             # self.basepath = f"/hdd/ayushj/habitat_data/{mapname}_{episode}"
@@ -369,13 +375,266 @@ class AutomatedMultiview():
         axis = np.cross(v0, v1)
         s = np.sqrt((1 + c) * 2)
         return np.quaternion(s * 0.5, *(axis / s))
+    
+
+    # def get_habitat_pix_T_camX(self, fov):
+    #     hfov = float(self.fov) * np.pi / 180.
+    #     pix_T_camX = np.array([
+    #         [(self.sim_settings["width"]./2.)*1 / np.tan(hfov / 2.), 0., 0., 0.],
+    #         [0., (self.sim_settings["height"]/2.)*1 / np.tan(hfov / 2.), 0., 0.],
+    #         [0., 0.,  1, 0],
+    #         [0., 0., 0, 1]])
+    #     return pix_T_camX
+
+    def get_camera_matrix(self, width, height, fov):
+        """Returns a camera matrix from image size and fov."""
+        xc = (width - 1.) / 2.
+        zc = (height - 1.) / 2.
+        f = (width / 2.) / np.tan(np.deg2rad(fov / 2.))
+        camera_matrix = {'xc': xc, 'zc': zc, 'f': f}
+        camera_matrix = Namespace(**camera_matrix)
+        return camera_matrix
+
+    def get_point_cloud_from_z(self, Y, camera_matrix, scale=1):
+        """Projects the depth image Y into a 3D point cloud.
+        Inputs:
+            Y is ...xHxW
+            camera_matrix
+        Outputs:
+            X is positive going right
+            Y is positive into the image
+            Z is positive up in the image
+            XYZ is ...xHxWx3
+        """
+        x, z = np.meshgrid(np.arange(Y.shape[-1]),
+                        np.arange(Y.shape[-2] - 1, -1, -1))
+        for i in range(Y.ndim - 2):
+            x = np.expand_dims(x, axis=0)
+            z = np.expand_dims(z, axis=0)
+        X = (x[::scale, ::scale] - camera_matrix.xc) * Y[::scale, ::scale] / camera_matrix.f
+        Z = (z[::scale, ::scale] - camera_matrix.zc) * Y[::scale, ::scale] / camera_matrix.f
+        XYZ = np.concatenate((X[..., np.newaxis], Y[::scale, ::scale][..., np.newaxis],
+                            Z[..., np.newaxis]), axis=X.ndim)
+        return XYZ
 
     def run(self):
-
+        scene = self.sim.semantic_scene
+        object_centers = self.get_midpoint_obj_conf()
+        print("DJSD")
+        print(object_centers)
+        print(object_centers.shape)
         scene = self.sim.semantic_scene
         objects = scene.objects
-        objects = random.sample(objects, len(objects))
         for obj in objects:
+            if obj == None or obj.category == None or obj.category.name() not in self.include_classes:
+                continue
+            obj_center = obj.obb.to_aabb().center
+            #print(obj_center)
+            obj_center = np.expand_dims(obj_center, axis=0)
+            print("CENTER: ", obj_center)
+        for obj_idx in range(object_centers.shape[0]):
+
+            # Calculate distance to object center
+            obj_center = object_centers[0]
+            
+            #print(obj_center)
+            obj_center = np.expand_dims(obj_center, axis=0)
+
+            print("OBJECT CENTER: ", obj_center.shape)
+            print(self.nav_pts.shape)
+            #print(obj_center)
+            distances = np.sqrt(np.sum((self.nav_pts - obj_center)**2, axis=1))
+
+            # Get points with r_min < dist < r_max
+            valid_pts = self.nav_pts[np.where((distances > self.radius_min)*(distances<self.radius_max))]
+            # if not valid_pts:
+                # continue
+
+            # plot valid points that we happen to select
+            # self.plot_navigable_points(valid_pts)
+
+            # Bin points based on angles [vertical_angle (10 deg/bin), horizontal_angle (10 deg/bin)]
+            valid_pts_shift = valid_pts - obj_center
+
+            dz = valid_pts_shift[:,2]
+            dx = valid_pts_shift[:,0]
+            dy = valid_pts_shift[:,1]
+
+            # Get yaw for binning 
+            valid_yaw = np.degrees(np.arctan2(dz,dx))
+
+            # pitch calculation 
+            dxdz_norm = np.sqrt((dx * dx) + (dz * dz))
+            valid_pitch = np.degrees(np.arctan2(dy,dxdz_norm))
+
+            # binning yaw around object
+            nbins = 18
+            bins = np.linspace(-180, 180, nbins+1)
+            bin_yaw = np.digitize(valid_yaw, bins)
+
+            num_valid_bins = np.unique(bin_yaw).size
+
+            spawns_per_bin = int(self.num_views / num_valid_bins) + 2
+            print(f'spawns_per_bin: {spawns_per_bin}')
+
+            if self.visualize:
+                print("PLOTTING")
+                import matplotlib.cm as cm
+                colors = iter(cm.rainbow(np.linspace(0, 1, nbins)))
+                plt.figure(2)
+                plt.clf()
+                print(np.unique(bin_yaw))
+                for bi in range(nbins):
+                    cur_bi = np.where(bin_yaw==(bi+1))
+                    points = valid_pts[cur_bi]
+                    x_sample = points[:,0]
+                    z_sample = points[:,2]
+                    plt.plot(z_sample, x_sample, 'o', color = next(colors))
+                plt.plot(obj_center[:,2], obj_center[:,0], 'x', color = 'black')
+                plt.show()
+
+            
+            action = "do_nothing"
+            episodes = []
+            valid_pts_selected = []
+            cnt = 0
+            for b in range(nbins):
+                
+                # get all angle indices in the current bin range
+                # st()
+                inds_bin_cur = np.where(bin_yaw==(b+1)) # bins start 1 so need +1
+                if inds_bin_cur[0].size == 0:
+                    print("NO BINS")
+                    continue
+
+                for s in range(spawns_per_bin):
+                    # st()
+                    s_ind = np.random.choice(inds_bin_cur[0])
+                    #s_ind = inds_bin_cur[0][0]
+                    pos_s = valid_pts[s_ind]
+                    valid_pts_selected.append(pos_s)
+                    agent_state = habitat_sim.AgentState()
+                    agent_state.position = pos_s + np.array([0, 1.5, 0])
+
+
+                    # YAW calculation - rotate to object
+                    agent_to_obj = np.squeeze(obj_center) - agent_state.position
+                    agent_local_forward = np.array([0, 0, -1.0]) # y, z, x
+                    flat_to_obj = np.array([agent_to_obj[0], 0.0, agent_to_obj[2]])
+                    flat_dist_to_obj = np.linalg.norm(flat_to_obj)
+                    flat_to_obj /= flat_dist_to_obj
+
+                    det = (flat_to_obj[0] * agent_local_forward[2]- agent_local_forward[0] * flat_to_obj[2])
+                    turn_angle = math.atan2(det, np.dot(agent_local_forward, flat_to_obj))
+                    quat_yaw = quat_from_angle_axis(turn_angle, np.array([0, 1.0, 0]))
+
+                    # Set agent yaw rotation to look at object
+                    agent_state.rotation = quat_yaw
+                    
+                    # change sensor state to default 
+                    # need to move the sensors too
+                    print(self.agent.state.sensor_states)
+                    for sensor in self.agent.state.sensor_states:
+                        # st()
+                        self.agent.state.sensor_states[sensor].rotation = agent_state.rotation
+                        self.agent.state.sensor_states[sensor].position = agent_state.position # + np.array([0, 1.5, 0]) # ADDED IN UP TOP
+                        # print("PRINT", self.agent.state.sensor_states[sensor].rotation)
+
+                    # Calculate Pitch from head to object
+                    turn_pitch = np.degrees(math.atan2(agent_to_obj[1], flat_dist_to_obj))
+                    num_turns = np.abs(np.floor(turn_pitch/self.rot_interval)).astype(int) # compute number of times to move head up or down by rot_interval
+                    print("MOVING HEAD ", num_turns, " TIMES")
+                    movement = "look_up" if turn_pitch>0 else "look_down"
+
+                    # initiate agent
+                    self.agent.set_state(agent_state)
+                    self.sim.step(action)
+
+                    # Rotate "head" of agent up or down based on calculated pitch angle to object to center it in view
+                    if num_turns == 0:
+                        pass
+                    else: 
+                        for turn in range(num_turns):
+                            # st()
+                            self.sim.step(movement)
+                            if self.verbose:
+                                for sensor in self.agent.state.sensor_states:
+                                    print(self.agent.state.sensor_states[sensor].rotation)
+                    
+                    # get observations after centiering
+                    observations = self.sim.step(action)
+                    
+                    # Assuming all sensors have same rotation and position
+                    observations["rotations"] = self.agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
+                    observations["positions"] = self.agent.state.sensor_states['color_sensor'].position
+
+                    if self.visualize: 
+                        im = observations["color_sensor"]
+                        im = Image.fromarray(im, mode="RGBA")
+                        im = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
+                        plt.imshow(im)
+                        plt.show()
+
+
+                    '''
+                    NEED TO ADJUST HOW WE SAVE - CURRENTLY USING OBJECT INFO
+                    if self.is_valid_datapoint(observations, obj):
+                        if self.verbose:
+                            print("episode is valid......")
+                        episodes.append(observations)
+                        if self.visualize:
+                            rgb = observations["color_sensor"]
+                            semantic = observations["semantic_sensor"]
+                            depth = observations["depth_sensor"]
+                            self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+                    '''
+
+
+
+
+                    # if self.visualize:
+                    #         rgb = observations["color_sensor"]
+                    #         semantic = observations["semantic_sensor"]
+                    #         depth = observations["depth_sensor"]
+                    #         self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+
+                    #print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
+
+                    cnt +=1
+                        
+
+            if len(episodes) >= self.num_views:
+                print(f'num episodes: {len(episodes)}')
+                data_folder = obj.category.name() + '_' + obj.id
+                data_path = os.path.join(self.basepath, data_folder)
+                print("Saving to ", data_path)
+                os.mkdir(data_path)
+                flat_obs = np.random.choice(episodes, self.num_views, replace=False)
+                viewnum = 0
+                for obs in flat_obs:
+                    self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, True)
+                    viewnum += 1
+            else:
+                print(f"Not enough episodes: f{len(episodes)}")
+
+            if self.visualize:
+                valid_pts_selected = np.vstack(valid_pts_selected)
+                self.plot_navigable_points(valid_pts_selected)
+
+    def get_midpoint_obj_conf(self):
+        
+        scene = self.sim.semantic_scene
+        objects = scene.objects
+        print(objects)
+        #objects = random.sample(list(objects), self.num_objects_per_episode)
+        xyz_obj_mids = []
+        print(self.num_objects_per_episode)
+        print(len(objects))
+        count = 0
+        while count < self.num_objects_per_episode:
+            print("GETTING OBJECT #", count)
+            obj_ind = np.random.randint(low = 0, high = len(objects))
+            obj = objects[obj_ind]
             if obj == None or obj.category == None or obj.category.name() not in self.include_classes:
                 continue
             # st()
@@ -417,39 +676,43 @@ class AutomatedMultiview():
 
             num_valid_bins = np.unique(bin_yaw).size
 
-            spawns_per_bin = int(self.num_views / num_valid_bins) + 2
-            print(f'spawns_per_bin: {spawns_per_bin}')
-
-            if self.visualize:
-                import matplotlib.cm as cm
-                colors = iter(cm.rainbow(np.linspace(0, 1, nbins)))
-                #plt.figure(2)
-                #plt.clf()
-                print(np.unique(bin_yaw))
-                for bi in range(nbins):
-                    cur_bi = np.where(bin_yaw==(bi+1))
-                    points = valid_pts[cur_bi]
-                    x_sample = points[:,0]
-                    z_sample = points[:,2]
-                    plt.plot(z_sample, x_sample, 'o', color = next(colors))
-                plt.plot(obj_center[:,2], obj_center[:,0], 'x', color = 'black')
-                plt.show()
-                plt.pause(0.5)
-                plt.close()
+            # if self.visualize:
+            #     import matplotlib.cm as cm
+            #     colors = iter(cm.rainbow(np.linspace(0, 1, nbins)))
+            #     #plt.figure(2)
+            #     #plt.clf()
+            #     for bi in range(nbins):
+            #         cur_bi = np.where(bin_yaw==(bi+1))
+            #         points = valid_pts[cur_bi]
+            #         x_sample = points[:,0]
+            #         z_sample = points[:,2]
+            #         plt.plot(z_sample, x_sample, 'o', color = next(colors))
+            #     plt.plot(obj_center[:,2], obj_center[:,0], 'x', color = 'black')
+            #     plt.show()
+            #     plt.pause(0.5)
+            #     plt.close()
             
             action = "do_nothing"
             episodes = []
             valid_pts_selected = []
-            cnt = 0
             bin_inds = list(range(nbins))
             bin_inds = random.sample(bin_inds, len(bin_inds))
-            for b in bin_inds:
+            # b_inds_notempty = []
+            # # get rid of empty bins
+            # for b in bin_inds: 
+            #     inds_bin_cur = np.where(bin_yaw==(b+1))
+            #     if not inds_bin_cur[0].size == 0:
+            #         b_inds_notempty.append(b)
+            
+            for b in bin_inds: #b_inds_notempty:
+
+                inds_bin_cur = np.where(bin_yaw==(b+1)) # bins start 1 so need +1
+                if inds_bin_cur[0].size == 0:
+                    continue
                 
                 # get all angle indices in the current bin range
                 # st()
                 inds_bin_cur = np.where(bin_yaw==(b+1)) # bins start 1 so need +1
-                if inds_bin_cur[0].size == 0:
-                    continue
 
                 # st()
                 s_ind = np.random.choice(inds_bin_cur[0])
@@ -483,6 +746,8 @@ class AutomatedMultiview():
                     self.agent.state.sensor_states[sensor].position = agent_state.position # + np.array([0, 1.5, 0]) # ADDED IN UP TOP
                     # print("PRINT", self.agent.state.sensor_states[sensor].rotation)
 
+
+                # NOTE: for finding an object, i dont think we'd want to center it
                 # Calculate Pitch from head to object
                 turn_pitch = np.degrees(math.atan2(agent_to_obj[1], flat_dist_to_obj))
                 num_turns = np.abs(np.floor(turn_pitch/self.rot_interval)).astype(int) # compute number of times to move head up or down by rot_interval
@@ -507,39 +772,24 @@ class AutomatedMultiview():
                 # get observations after centiering
                 observations = self.sim.step(action)
 
-
                 ####### %%%%%%%%%%%%%%%%%%%%%%% ######### MASK RCNN
 
                 im = observations["color_sensor"]
                 im = Image.fromarray(im, mode="RGBA")
                 im = cv2.cvtColor(np.asarray(im), cv2.COLOR_RGB2BGR)
 
-                plt.imshow(im)
-                plt.show()
+                # plt.imshow(im)
+                # plt.show()
 
-                print(im.shape)
-                print(np.max(im))
-                print(np.min(im))
-                #im = np.transpose(im, (1, 2, 0)) #im.permute(1, 2, 0)
-                #im = im.detach().cpu().numpy()
-                print(im.shape)
-                
-                #im = im/255 # normalize [0-1]
-                print(im[0,0,:])
-                #im = im[:, :, ::-1] # bgr 
-                
-                print(im[0,0,:])
-                print(np.max(im))
-                print(np.min(im))
-                print(im.shape)
                 outputs = self.maskrcnn(im)
 
                 v = Visualizer(im[:, :, ::-1], MetadataCatalog.get(self.cfg_det.DATASETS.TRAIN[0]), scale=1.2)
                 out = v.draw_instance_predictions(outputs['instances'].to("cpu"))
                 seg_im = out.get_image()
 
-                plt.imshow(seg_im)
-                plt.show()
+                if self.visualize:
+                    plt.imshow(seg_im)
+                    plt.show()
 
                 pred_masks = outputs['instances'].pred_masks
                 pred_boxes = outputs['instances'].pred_boxes.tensor
@@ -555,14 +805,12 @@ class AutomatedMultiview():
                 obj_all_boxes = []
                 for segs in range(len(pred_masks)):
                     # 1 and 3 are bikes. removing them for now
-                    print(pred_classes[segs])
                     #if pred_classes[segs] > 1 and pred_classes[segs] <= 8 and pred_classes[segs] != 3:
                     if pred_scores[segs] >= 0.80:
                         obj_ids.append(segs)
                         obj_catids.append(pred_classes[segs].item())
                         obj_scores.append(pred_scores[segs].item())
                         obj_masks.append(pred_masks[segs])
-                        print(pred_masks[segs])
 
                         obj_all_catids.append(pred_classes[segs].item())
                         obj_all_scores.append(pred_scores[segs].item())
@@ -575,27 +823,29 @@ class AutomatedMultiview():
                 print(obj_scores)
                 print(pred_scores.shape)
 
-                depth = observations["depth_sensor"]
-                print("DEPTH ", depth.shape)
-                
+                if not obj_masks:
+                    continue
+                else: 
+
+                    # randomly choose a high confidence object
+                    obj_mask_focus = random.choice(obj_masks)
+
+                    depth = observations["depth_sensor"]
+
+                    xyz = self.get_point_cloud_from_z(depth, self.camera_matrix, scale=1)
+
+                    xyz_obj_masked = xyz[obj_mask_focus]
+                    xyz_obj_mid = np.mean(xyz_obj_masked, axis=0)
+
+                    xyz_obj_mids.append(xyz_obj_mid)
+
+                    count += 1
+
+                    break # got an object
+
 
                 #################################
-
-
-                
-                # Assuming all sensors have same rotation and position
-                observations["rotations"] = self.agent.state.sensor_states['color_sensor'].rotation #agent_state.rotation
-                observations["positions"] = self.agent.state.sensor_states['color_sensor'].position
-                
-                if self.is_valid_datapoint(observations, obj):
-                    if self.verbose:
-                        print("episode is valid......")
-                    episodes.append(observations)
-                    if self.visualize:
-                        rgb = observations["color_sensor"]
-                        semantic = observations["semantic_sensor"]
-                        depth = observations["depth_sensor"]
-                        self.display_sample(rgb, semantic, depth, mainobj=obj, visualize=False)
+            
                 # if self.visualize:
                 #         rgb = observations["color_sensor"]
                 #         semantic = observations["semantic_sensor"]
@@ -604,26 +854,12 @@ class AutomatedMultiview():
 
                 #print("agent_state: position", self.agent.state.position, "rotation", self.agent.state.rotation)
 
-                cnt +=1
+                
+        xyz_obj_mids = np.array(xyz_obj_mids)
+
+        return xyz_obj_mids
                         
 
-            if len(episodes) >= self.num_views:
-                print(f'num episodes: {len(episodes)}')
-                data_folder = obj.category.name() + '_' + obj.id
-                data_path = os.path.join(self.basepath, data_folder)
-                print("Saving to ", data_path)
-                os.mkdir(data_path)
-                flat_obs = np.random.choice(episodes, self.num_views, replace=False)
-                viewnum = 0
-                for obs in flat_obs:
-                    self.save_datapoint(self.agent, obs, data_path, viewnum, obj.id, True)
-                    viewnum += 1
-            else:
-                print(f"Not enough episodes: f{len(episodes)}")
-
-            if self.visualize:
-                valid_pts_selected = np.vstack(valid_pts_selected)
-                self.plot_navigable_points(valid_pts_selected)
 
 
 
