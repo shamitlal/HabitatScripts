@@ -320,7 +320,7 @@ class AutomatedMultiview():
                 # st()
                 obj_data = {'instance_id': obj_id, 'category_id': obj_instance.category.index(), 'category_name': obj_instance.category.name(),
                                  'bbox_center': obj_instance.obb.center, 'bbox_size': obj_instance.obb.sizes,
-                                  'local_T_world': obj_instance.obb.local_to_world, 'mask_2d': mask, 'box_2d': pred_box}
+                                  'world_T_local': obj_instance.obb.local_to_world, 'mask_2d': mask, 'box_2d': pred_box}
                 # object_list.append(obj_instance)
                 object_list.append(obj_data)
 
