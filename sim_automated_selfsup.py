@@ -119,6 +119,7 @@ class AutomatedMultiview():
 
             self.fov = 90
             self.camera_matrix = self.get_camera_matrix(self.sim_settings["width"], self.sim_settings["height"], self.fov)
+            self.K = self.get_habitat_pix_T_camX(self.fov)
 
             self.basepath = f"/home/nel/gsarch/replica_dome_selfsup/{mapname}_{episode}"
             # self.basepath = f"/hdd/ayushj/habitat_data/{mapname}_{episode}"
@@ -377,14 +378,14 @@ class AutomatedMultiview():
         return np.quaternion(s * 0.5, *(axis / s))
     
 
-    # def get_habitat_pix_T_camX(self, fov):
-    #     hfov = float(self.fov) * np.pi / 180.
-    #     pix_T_camX = np.array([
-    #         [(self.sim_settings["width"]./2.)*1 / np.tan(hfov / 2.), 0., 0., 0.],
-    #         [0., (self.sim_settings["height"]/2.)*1 / np.tan(hfov / 2.), 0., 0.],
-    #         [0., 0.,  1, 0],
-    #         [0., 0., 0, 1]])
-    #     return pix_T_camX
+    def get_habitat_pix_T_camX(self, fov):
+        hfov = float(self.fov) * np.pi / 180.
+        pix_T_camX = np.array([
+            [(self.sim_settings["width"]/2.)*1 / np.tan(hfov / 2.), 0., 0., 0.],
+            [0., (self.sim_settings["height"]/2.)*1 / np.tan(hfov / 2.), 0., 0.],
+            [0., 0.,  1, 0],
+            [0., 0., 0, 1]])
+        return pix_T_camX
 
     def get_camera_matrix(self, width, height, fov):
         """Returns a camera matrix from image size and fov."""
@@ -440,7 +441,7 @@ class AutomatedMultiview():
             #print(obj_center)
             obj_center = np.expand_dims(obj_center, axis=0)
 
-            print("OBJECT CENTER: ", obj_center.shape)
+            print("OBJECT CENTER: ", obj_center)
             print(self.nav_pts.shape)
             #print(obj_center)
             distances = np.sqrt(np.sum((self.nav_pts - obj_center)**2, axis=1))
@@ -451,7 +452,7 @@ class AutomatedMultiview():
                 # continue
 
             # plot valid points that we happen to select
-            # self.plot_navigable_points(valid_pts)
+            self.plot_navigable_points(valid_pts)
 
             # Bin points based on angles [vertical_angle (10 deg/bin), horizontal_angle (10 deg/bin)]
             valid_pts_shift = valid_pts - obj_center
@@ -796,6 +797,8 @@ class AutomatedMultiview():
                 pred_classes = outputs['instances'].pred_classes
                 pred_scores = outputs['instances'].scores
 
+                maskrcnn_to_catname = {56: "chair", 59: "bed", 61: "toilet", 57: "couch", 58: "indoor-plant", 72: "refrigerator", 62: "tv", 60: "dining-table"}
+
                 obj_ids = []
                 obj_catids = []
                 obj_scores = []
@@ -804,24 +807,30 @@ class AutomatedMultiview():
                 obj_all_scores = []
                 obj_all_boxes = []
                 for segs in range(len(pred_masks)):
-                    # 1 and 3 are bikes. removing them for now
-                    #if pred_classes[segs] > 1 and pred_classes[segs] <= 8 and pred_classes[segs] != 3:
-                    if pred_scores[segs] >= 0.80:
-                        obj_ids.append(segs)
-                        obj_catids.append(pred_classes[segs].item())
-                        obj_scores.append(pred_scores[segs].item())
-                        obj_masks.append(pred_masks[segs])
+                    if pred_classes[segs].item() in maskrcnn_to_catname:
+                        if pred_scores[segs] >= 0.80:
+                            obj_ids.append(segs)
+                            obj_catids.append(pred_classes[segs].item())
+                            obj_scores.append(pred_scores[segs].item())
+                            obj_masks.append(pred_masks[segs])
 
-                        obj_all_catids.append(pred_classes[segs].item())
-                        obj_all_scores.append(pred_scores[segs].item())
-                        y, x = torch.where(pred_masks[segs])
-                        pred_box = torch.Tensor([min(y), min(x), max(y), max(x)]) # ymin, xmin, ymax, xmax
-                        obj_all_boxes.append(pred_box)
+                            obj_all_catids.append(pred_classes[segs].item())
+                            obj_all_scores.append(pred_scores[segs].item())
+                            y, x = torch.where(pred_masks[segs])
+                            pred_box = torch.Tensor([min(y), min(x), max(y), max(x)]) # ymin, xmin, ymax, xmax
+                            obj_all_boxes.append(pred_box)
 
                 print("MASKS ", len(pred_masks))
                 print("VALID ", len(obj_scores))
                 print(obj_scores)
                 print(pred_scores.shape)
+
+                translation_ = self.agent.state.sensor_states['depth_sensor'].position
+                quaternion_ = self.agent.state.sensor_states['depth_sensor'].rotation
+                rotation_ = quaternion.as_rotation_matrix(quaternion_)
+                T_world_cam = np.eye(4)
+                T_world_cam[0:3,0:3] =  rotation_
+                T_world_cam[0:3,3] = translation_
 
                 if not obj_masks:
                     continue
@@ -832,10 +841,24 @@ class AutomatedMultiview():
 
                     depth = observations["depth_sensor"]
 
-                    xyz = self.get_point_cloud_from_z(depth, self.camera_matrix, scale=1)
+                    xs, ys = np.meshgrid(np.linspace(-1*256/2.,1*256/2.,256), np.linspace(1*256/2.,-1*256/2., 256))
+                    depth = depth.reshape(1,256,256)
+                    xs = xs.reshape(1,256,256)
+                    ys = ys.reshape(1,256,256)
+
+                    xys = np.vstack((xs * depth , ys * depth, -depth, np.ones(depth.shape)))
+                    xys = xys.reshape(4, -1)
+                    xy_c0 = np.matmul(np.linalg.inv(self.K), xys)
+                    xyz = xy_c0.T[:,:3].reshape(256,256,3)
+
+                    #xyz = self.get_point_cloud_from_z(depth, self.camera_matrix, scale=1)
 
                     xyz_obj_masked = xyz[obj_mask_focus]
-                    xyz_obj_mid = np.mean(xyz_obj_masked, axis=0)
+
+                    xyz_obj_masked = np.matmul(rotation_, xyz_obj_masked.T) + translation_.reshape(3,1)
+                    xyz_obj_mid = np.mean(xyz_obj_masked, axis=1)
+
+                    print("MIDPOINT=", xyz_obj_mid)
 
                     xyz_obj_mids.append(xyz_obj_mid)
 
